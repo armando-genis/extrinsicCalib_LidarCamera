@@ -1,0 +1,52 @@
+# ------------------------------------------------------------# Units:
+#   - meters for distances
+#   - degrees for angles
+# ------------------------------------------------------------
+
+# Axis-aligned box filter (meters). Points outside [xmin,xmax] x [ymin,ymax] x [zmin,zmax] are removed.
+box_filter:
+  xmin: -1.0
+  xmax: 4.0
+  ymin: -5.0
+  ymax: 5.0
+  zmin: -2.0
+  zmax: 2.0
+
+transform:
+  T_4x4: null
+
+preproc_filters:
+  voxel_size: 0.0
+
+  statistical_outlier_removal:
+    enabled: false
+    nb_neighbors: 20
+    std_ratio: 2.0
+
+  radius_outlier_removal:
+    enabled: false
+    nb_points: 16
+    radius: 0.50
+
+normal_estimation:
+  method: "knn"
+  knn: 100
+  radius: 100.0
+
+region_growing:
+  number_neighbors: 30
+  smoothness_deg: 6.0
+  curvature_thresh: 0.2
+  cluster_size_min: 50
+  cluster_size_max: 10000
+
+board_size_filter:
+  width_tol_min: 0.05
+  width_tol_max: 0.10
+  height_tol_min: 0.05
+  height_tol_max: 0.10
+
+plane_ransac:
+  distance_threshold: 0.05
+  ransac_n: 3
+  num_iterations: 100

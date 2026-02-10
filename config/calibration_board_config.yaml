@@ -1,0 +1,22 @@
+%YAML 1.0
+board_width: 1.2
+board_height: 0.6
+marker_size: 0.18
+marker_ids:
+    rows: 4
+    cols: 1
+    dt: i
+    data: [1, 2, 3, 4]
+marker_positions:
+    rows: 4
+    cols: 2
+    dt: f
+    data: [-0.55000000, 0.25000000, 0.37000000, 0.25000000, 0.37000000, -0.07000000, -0.55000000, -0.07000000]
+cutouts:
+    rows: 1
+    cols: 12
+    dt: f
+    data: [1.00000000, 0.15000000, -0.15000000, 0.12000000, 1.00000000, -0.15000000, -0.15000000, 0.12000000, 1.00000000, 0.00000000, 0.15000000, 0.12000000]
+min_marker_detection: 2
+cad_model_mesh: "calibration_target_3holes_cad_mesh.ply"
+cad_model_cloud: "calibration_target_3holes_cad_cloud.ply"
