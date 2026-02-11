@@ -212,6 +212,8 @@ class LidarCameraSync():
                 self.viz.log_pose_axes(idx, R_cam_robot, t_cam_robot,
                                         entity_path="camera/board_pose")
 
+            # from this i have to cute to compute the stack of extrinsics. - to do 
+
             lidar_pts = board["corners_3d"]
             # cam_pts = camera_points_robot   #Compute extrinsic in robot frame, later have to convert extrinsic back to OpenCV frame
             cam_pts = corners_cam   #Extrinsic is LiDAR → OpenCV camera
@@ -264,19 +266,25 @@ class LidarCameraSync():
             err_m = np.linalg.norm(lidar_in_cam - corners_cam, axis=1)
             print("3D alignment error (m):", err_m, "mean:", err_m.mean())
 
-            colored_pts, colors = self.colorize_lidar(
-                processed_lidar["xyz"],
-                undist,      # UNDISTORTED image
+            colored_pts, colors = self.colorize_lidar_vectorized(
+                processed_lidar["raw_xyz"],         
+                undist,
                 R_ext,
                 t_ext,
                 K
             )
 
-            self.viz.log_pointcloud(
-                idx,
-                colored_pts,
-                colors=colors
+            self.viz.log_pointcloud_colored(idx, colored_pts, colors)
+
+            overlay = self.draw_lidar_on_image(
+                undist,
+                processed_lidar["raw_xyz"],
+                R_ext,
+                t_ext,
+                K
             )
+
+            self.viz.log_image(idx, overlay)
 
     def compute_extrinsic_svd(self, lidar_pts: np.ndarray,
                             cam_pts: np.ndarray):
@@ -396,6 +404,121 @@ class LidarCameraSync():
 
         return np.array(valid_points), np.array(colors, dtype=np.uint8) if colors else np.zeros((0, 3), dtype=np.uint8)
 
+    def colorize_lidar_vectorized(self,
+                                lidar_xyz,
+                                image,
+                                R_ext,
+                                t_ext,
+                                K):
+
+        lidar_xyz = np.asarray(lidar_xyz, dtype=np.float64)
+        h, w = image.shape[:2]
+
+        # --- Transform LiDAR → camera frame (OpenCV) ---
+        P_cam = (R_ext @ lidar_xyz.T).T + t_ext.reshape(1, 3)
+
+        # Keep only points in front of camera
+        mask_front = P_cam[:, 2] > 0
+        P_cam = P_cam[mask_front]
+        lidar_xyz = lidar_xyz[mask_front]
+
+        if P_cam.shape[0] == 0:
+            return np.empty((0, 3)), np.empty((0, 3))
+
+        # --- Project to image ---
+        rvec_ext, _ = cv2.Rodrigues(R_ext)
+        D_zero = np.zeros((4, 1), dtype=np.float64)  # fisheye undistorted
+
+        proj_pts, _ = cv2.projectPoints(
+            lidar_xyz,
+            rvec_ext,
+            t_ext.reshape(3, 1),
+            K,
+            D_zero
+        )
+
+        proj_pts = proj_pts.reshape(-1, 2)
+
+        # --- Pixel coordinates ---
+        u = np.round(proj_pts[:, 0]).astype(np.int32)
+        v = np.round(proj_pts[:, 1]).astype(np.int32)
+
+        # Keep only points inside image
+        mask_img = (
+            (u >= 0) & (u < w) &
+            (v >= 0) & (v < h)
+        )
+
+        u = u[mask_img]
+        v = v[mask_img]
+        lidar_valid = lidar_xyz[mask_img]
+
+        if lidar_valid.shape[0] == 0:
+            return np.empty((0, 3)), np.empty((0, 3))
+
+        # --- Sample colors (image is already RGB from decoder) ---
+        colors = np.asarray(image[v, u], dtype=np.uint8)  # (N, 3) RGB uint8
+
+        return lidar_valid, colors
+
+
+    def draw_lidar_on_image(self,
+                            image,
+                            lidar_xyz,
+                            R_ext,
+                            t_ext,
+                            K):
+
+        img = image.copy()
+        h, w = img.shape[:2]
+
+        lidar_xyz = np.asarray(lidar_xyz, dtype=np.float64)
+
+        # --- Transform to camera frame ---
+        P_cam = (R_ext @ lidar_xyz.T).T + t_ext.reshape(1,3)
+
+        # Keep only points in front
+        mask_front = P_cam[:,2] > 0
+        P_cam = P_cam[mask_front]
+
+        if P_cam.shape[0] == 0:
+            return img
+
+        # --- Project ---
+        rvec_ext, _ = cv2.Rodrigues(R_ext)
+        D_zero = np.zeros((4,1), dtype=np.float64)
+
+        proj_pts, _ = cv2.projectPoints(
+            lidar_xyz[mask_front],
+            rvec_ext,
+            t_ext.reshape(3,1),
+            K,
+            D_zero
+        )
+
+        proj_pts = proj_pts.reshape(-1,2)
+
+        u = np.round(proj_pts[:,0]).astype(np.int32)
+        v = np.round(proj_pts[:,1]).astype(np.int32)
+
+        # Keep inside image
+        mask_img = (
+            (u >= 0) & (u < w) &
+            (v >= 0) & (v < h)
+        )
+
+        u = u[mask_img]
+        v = v[mask_img]
+
+        # --- Paint pixels ---
+        depth = P_cam[mask_img, 2]
+        depth_norm = (depth - depth.min()) / (depth.max() - depth.min() + 1e-6)
+        colors = (depth_norm * 255).astype(np.uint8)
+
+        for ui, vi, ci in zip(u, v, colors):
+            img[vi, ui] = (ci, 255-ci, 0)  # gradient
+
+        return img
 
 
 if __name__ == '__main__':

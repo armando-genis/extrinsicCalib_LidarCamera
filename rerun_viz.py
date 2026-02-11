@@ -35,16 +35,28 @@ def _rotation_matrix_to_quat_xyzw(R: np.ndarray) -> np.ndarray:
 
 
 def _default_blueprint():
-    """Two 3D views: Lidar only (left), Camera only (right). Each view shows only its own entities."""
+    """Image + three 3D views: Lidar (gray+ROI), Lidar colored (camera-colored), Camera. Each view shows only its own entities."""
     return rrb.Blueprint(
         rrb.Horizontal(
-            # Left: only lidar point clouds and board (no camera data)
+            # Left: camera image (2D)
+            rrb.Spatial2DView(
+                origin="camera",
+                name="Image",
+                contents=["camera/image"],
+            ),
+            # Lidar point cloud (gray), ROI, board
             rrb.Spatial3DView(
                 origin="lidar",
                 name="Lidar",
                 contents=["lidar/points", "lidar/roi_cloud_xyz", "lidar/board_corners", "lidar/board_pose", "lidar/origin"],
             ),
-            # Right: only camera 3D points, axes, and board pose (no lidar point clouds)
+            # Same lidar frame but only the camera-colored point cloud
+            rrb.Spatial3DView(
+                origin="lidar",
+                name="Lidar (colored)",
+                contents=["lidar/points_colored"],
+            ),
+            # Camera 3D points, axes, and board pose
             rrb.Spatial3DView(
                 origin="camera",
                 name="Camera",
@@ -74,6 +86,14 @@ class RerunVisualizer:
             colors = np.full((points_xyz.shape[0], 3), [160, 160, 160], dtype=np.uint8)
         rr.log(
             "lidar/points",
+            rr.Points3D(points_xyz, colors=colors),
+        )
+
+    def log_pointcloud_colored(self, frame_idx: int, points_xyz: np.ndarray, colors: np.ndarray):
+        """Log camera-colored lidar points in a separate panel (lidar/points_colored) so they don't overwrite the gray cloud."""
+        rr.set_time("frame", sequence=frame_idx)
+        rr.log(
+            "lidar/points_colored",
             rr.Points3D(points_xyz, colors=colors),
         )
 
