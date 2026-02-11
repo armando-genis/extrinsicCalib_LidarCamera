@@ -136,97 +136,46 @@ class LidarCameraSync():
 
                 if pose_ok:
                     corners_cam, corner_ids = self.board.compute_board_corners_in_camera_frame(rvec, tvec)
+                    corners_cam_2d, _ = self.board.compute_board_corners_in_image(rvec, tvec, K, D_zero)
                     self.board.draw_board_pose(undist, rvec, tvec, K, D_zero, axis_length=0.25)
                     self.board.draw_board_contour_and_circles(undist, rvec, tvec, K, D_zero)
                     self.board.draw_corners_id(undist, rvec, tvec, K, D_zero, corner_ids=corner_ids)
+                    # corners_cam are already 3D in camera frame (meters); use directly for viz
+                    camera_points_meters = np.asarray(corners_cam, dtype=np.float64)
 
-                    return undist, original_image, rvec, tvec, corners_cam, corner_ids, ids
 
-        return undist, original_image, None, None, None, None, None
+                    return undist, original_image, rvec, tvec, corners_cam, corner_ids, ids, camera_points_meters, corners_cam_2d
+
+        return undist, original_image, None, None, None, None, None, None, None
 
     def process_lidar(self, lidar: np.ndarray) -> Dict[str, Any]:
         out = self.lidar_processor.process(lidar)
         return out
 
-    def extrinsic_calibration(self, rvec: np.ndarray, tvec: np.ndarray, 
-                            corners_cam: np.ndarray, board_info: Dict[str, Any], 
-                            undist: np.ndarray, ids: List[int],
-                            lidar_corner_ids: List[int], camera_corner_ids: List[int]):
+    def points_to_robot_frame(self, points: np.ndarray) -> np.ndarray:
+        R_cv_to_robot = np.array([
+            [ 0,  0,  1],
+            [-1,  0,  0],
+            [ 0, -1,  0],
+        ])
+        return (R_cv_to_robot @ points.T).T
 
-
-        if rvec is not None and tvec is not None and board_info["corners_3d"] is not None and corners_cam is not None and undist is not None and len(ids) >= self.board.min_marker_detection:
-            # Lidar boarder information
-            lidar_corners = np.array(board_info["corners_3d"])
-            lidar_rvec = board_info["R"]
-            lidar_tvec = board_info["t"]
-
-            # Camera boarder information
-            camera_rvec = rvec
-            camera_tvec = tvec
-
-            # Reshaping the points correctly
-            camera_corners = np.array(corners_cam, dtype=np.float32)
-            lidar_corners = np.array(lidar_corners, dtype=np.float32)
-
-            print(f"Camera corners: {camera_corners}")
-            print(f"Lidar corners: {lidar_corners}")
-
-            # print length of camera and lidar corners
-            print(f"Length of camera corners: {len(camera_corners)}")
-            print(f"Length of lidar corners: {len(lidar_corners)}")
-
-            print(f"Lidar corner ids: {lidar_corner_ids}")
-            print(f"Camera corner ids: {camera_corner_ids}")
-
-            # Camera matrix (Intrinsic parameters)
-            K = self.undistorter.get_K()
-            
-            # Initialize distortion coefficients to zero (fisheye model needs 4 distortion coefficients)
-            D_zero = np.zeros((4, 1), dtype=np.float32)  # [k1, k2, k3, k4] all zero
-
-            if len(camera_corners) >= 4 and len(lidar_corners) >= 4:
-
-                print(f"Camera corners shape before reshaping: {camera_corners.shape}")
-                print(f"Lidar corners shape before reshaping: {lidar_corners.shape}")   
-
-                # convert and shape image points properly
-                img_pts = np.array(camera_corners[:, :2], dtype=np.float32).reshape(-1, 1, 2)
-
-                # convert and shape object points properly
-                obj_pts = np.array(lidar_corners, dtype=np.float32).reshape(-1, 1, 3)
-
-                print(f"Image points shape: {img_pts.shape}")
-                print(f"Object points shape: {obj_pts.shape}")
-                print(f"Image points dtype: {img_pts.dtype}")
-                print(f"Object points dtype: {obj_pts.dtype}")
-
-                success, rvec_lidar_to_cam, tvec_lidar_to_cam = cv2.solvePnP(
-                    obj_pts,  # 3D LiDAR points
-                    img_pts,  # Undistorted 2D camera points
-                    K,  # Identity matrix for undistorted camera
-                    D_zero,  # Zero distortion coefficients
-                    flags=cv2.SOLVEPNP_ITERATIVE  # Use iterative solution for PnP
-                )
-
-                if success:
-                    print("PnP calibration successful")
-                    print("rvec_lidar_to_cam:", rvec_lidar_to_cam)
-                    print("tvec_lidar_to_cam:", tvec_lidar_to_cam)
-
-                    # Reprojection error
-                    proj_pts, _ = cv2.projectPoints(obj_pts, rvec_lidar_to_cam, tvec_lidar_to_cam, K, D_zero)
-                    error = cv2.norm(img_pts, proj_pts, cv2.NORM_L2) / len(proj_pts)
-                    print(f"Reprojection error: {error}")
-                else:
-                    print("PnP calibration failed")
-            else:
-                print("Not enough points for PnP calibration. At least 4 points required.")
-
+    def transform_rvec_tvec_to_robot_frame(self, rvec: np.ndarray, tvec: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        R_cv_to_robot = np.array([
+            [ 0,  0,  1],
+            [-1,  0,  0],
+            [ 0, -1,  0],
+        ])
+        R_cam_cv, _ = cv2.Rodrigues(rvec)
+        t_cam_cv = tvec.reshape(3)
+        R_cam_robot = R_cv_to_robot @ R_cam_cv
+        t_cam_robot = R_cv_to_robot @ t_cam_cv
+        return R_cam_robot, t_cam_robot
 
     def run(self):
         for idx in self.dataset.indices():
             image = self.dataset.load_image(idx)
-            undist, original_image, rvec, tvec, corners_cam, camera_corner_ids, ids = self.process_frame(image)
+            undist, original_image, rvec, tvec, corners_cam, camera_corner_ids, ids, camera_points_meters, corners_cam_2d = self.process_frame(image)
             lidar = self.dataset.load_lidar(idx)
             processed_lidar = self.process_lidar(lidar)
 
@@ -235,9 +184,6 @@ class LidarCameraSync():
             roi_cloud_xyz = board["roi_cloud_xyz"]
             lidar_corner_ids = board["corner_ids"]
 
-
-            # extrinsic calibration
-            self.extrinsic_calibration(rvec, tvec, corners_cam, board, undist, ids, lidar_corner_ids, camera_corner_ids)
 
             self.viz.log_image(idx, undist)
             self.viz.log_pointcloud(idx, processed_lidar["xyz"])
@@ -253,13 +199,212 @@ class LidarCameraSync():
             if board["R"] is not None and board["t"] is not None:
                 self.viz.log_pose_axes(idx, board["R"], board["t"])
 
+            # Camera frame: 3D points (board corners in camera coords), camera axes, and board pose (rvec/tvec)
+            if camera_points_meters is not None:
+
+                camera_points_robot = self.points_to_robot_frame(camera_points_meters)
+
+                self.viz.log_camera_points_3d(idx, camera_points_robot, corner_ids=camera_corner_ids)
+            self.viz.log_camera_axes(idx)
+            if rvec is not None and tvec is not None:
+                R_cam_robot, t_cam_robot = self.transform_rvec_tvec_to_robot_frame(rvec, tvec)
+
+                self.viz.log_pose_axes(idx, R_cam_robot, t_cam_robot,
+                                        entity_path="camera/board_pose")
+
+            lidar_pts = board["corners_3d"]
+            # cam_pts = camera_points_robot   #Compute extrinsic in robot frame, later have to convert extrinsic back to OpenCV frame
+            cam_pts = corners_cam   #Extrinsic is LiDAR → OpenCV camera
+            
+            R_ext, t_ext = self.compute_extrinsic_svd(
+                np.asarray(lidar_pts),
+                np.asarray(cam_pts)
+            )
+
+            print("OpenCV Extrinsic R:\n", R_ext)
+            print("OpenCV Extrinsic t:\n", t_ext)
+
+            R_cv_to_robot = np.array([
+                [ 0,  0,  1],
+                [-1,  0,  0],
+                [ 0, -1,  0],
+            ], dtype=np.float64)
+
+            R_ext_robot = R_cv_to_robot @ R_ext
+            t_ext_robot = R_cv_to_robot @ t_ext
+            
+            self.viz.log_pose_axes(
+                idx,
+                R_ext_robot,
+                t_ext_robot,
+                entity_path="extrinsic/lidar_to_camera"
+            )
+
+            print("Robot Frame Extrinsic R:\n", R_ext_robot)
+            print("Robot Frame Extrinsic t:\n", t_ext_robot)
+
+            # compute reprojection error with the OpenCV extrinsic 
+            K = self.undistorter.get_K()
+            D_zero = self.undistorter.get_zero_distortion()
+
+            errors, mean_error, std_error = self.compute_reprojection_error(
+                lidar_pts,
+                corners_cam_2d,
+                R_ext,
+                t_ext,
+                K,
+                D_zero
+            )
+
+            print("Reprojection error per point (px):", errors)
+            print("Mean reprojection error (px):", mean_error)
+            print("RMS reprojection error (px):", std_error)
+
+            lidar_in_cam = (R_ext @ lidar_pts.T).T + t_ext
+            err_m = np.linalg.norm(lidar_in_cam - corners_cam, axis=1)
+            print("3D alignment error (m):", err_m, "mean:", err_m.mean())
+
+            colored_pts, colors = self.colorize_lidar(
+                processed_lidar["xyz"],
+                undist,      # UNDISTORTED image
+                R_ext,
+                t_ext,
+                K
+            )
+
+            self.viz.log_pointcloud(
+                idx,
+                colored_pts,
+                colors=colors
+            )
+
+    def compute_extrinsic_svd(self, lidar_pts: np.ndarray,
+                            cam_pts: np.ndarray):
+
+        assert lidar_pts.shape == cam_pts.shape
+        assert lidar_pts.shape[0] >= 3
+
+        # centroids
+        centroid_lidar = np.mean(lidar_pts, axis=0)
+        centroid_cam = np.mean(cam_pts, axis=0)
+
+        # remove centroids
+        X = lidar_pts - centroid_lidar
+        Y = cam_pts - centroid_cam
+
+        # covariance
+        H = X.T @ Y
+
+        # SVD
+        U, S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+
+        # reflection fix
+        if np.linalg.det(R) < 0:
+            Vt[2, :] *= -1
+            R = Vt.T @ U.T
+
+        t = centroid_cam - R @ centroid_lidar
+
+        return R, t
+
+    def lidar_to_opencv_frame(self, lidar_pts: np.ndarray, R_ext: np.ndarray, t_ext: np.ndarray) -> np.ndarray:
+        lidar_pts = np.asarray(lidar_pts, dtype=np.float64)
+
+        lidar_in_cam = (R_ext @ lidar_pts.T).T + t_ext.reshape(1,3)
+
+        return lidar_in_cam
+
+    def compute_reprojection_error(self, lidar_pts, image_pts, R_ext, t_ext, K, D):
+        rvec_ext, _ = cv2.Rodrigues(R_ext)
+
+        proj_pts, _ = cv2.projectPoints(
+            np.asarray(lidar_pts, dtype=np.float64),
+            rvec_ext,
+            t_ext.reshape(3,1),
+            K,
+            D
+        )
+
+        proj_pts = proj_pts.reshape(-1, 2)
+        image_pts = np.asarray(image_pts, dtype=np.float64).reshape(-1, 2)
+
+        errors = np.linalg.norm(proj_pts - image_pts, axis=1)
+        return errors, float(np.mean(errors)), float(np.sqrt(np.mean(errors**2)))
+
+    # Project LiDAR points into the image and color them using the image pixels.
+    def project_lidar_to_image(self,
+                            lidar_xyz,
+                            R_ext,
+                            t_ext,
+                            K):
+
+        lidar_xyz = np.asarray(lidar_xyz, dtype=np.float64)
+
+        rvec_ext, _ = cv2.Rodrigues(R_ext)
+
+        D_zero = np.zeros((4,1), dtype=np.float64)
+
+        proj_pts, _ = cv2.projectPoints(
+            lidar_xyz,
+            rvec_ext,
+            t_ext.reshape(3,1),
+            K,
+            D_zero
+        )
+
+        proj_pts = proj_pts.reshape(-1, 2)
+
+        return proj_pts
+
+    def colorize_lidar(self,
+                    lidar_xyz,
+                    image,
+                    R_ext,
+                    t_ext,
+                    K):
+
+        h, w = image.shape[:2]
+
+        proj_pts = self.project_lidar_to_image(
+            lidar_xyz,
+            R_ext,
+            t_ext,
+            K
+        )
+
+        colors = []
+        valid_points = []
+
+        for pt3d, (u, v) in zip(lidar_xyz, proj_pts):
+
+            u_int = int(round(u))
+            v_int = int(round(v))
+
+            # Only keep points inside image
+            if 0 <= u_int < w and 0 <= v_int < h:
+
+                # Also ensure point is in front of camera
+                P_cam = R_ext @ pt3d + t_ext
+                if P_cam[2] <= 0:
+                    continue
+
+                # Image from decoder is typically RGB; use as-is so Rerun shows correct colors
+                color = np.asarray(image[v_int, u_int], dtype=np.uint8)
+                colors.append(color)
+                valid_points.append(pt3d)
+
+        return np.array(valid_points), np.array(colors, dtype=np.uint8) if colors else np.zeros((0, 3), dtype=np.uint8)
+
+
+
 if __name__ == '__main__':
     cam_yaml = "config/cam0.yaml"
     aruco_board_yaml = "config/calibration_board_config.yaml"
     lidar_camera_sync = LidarCameraSync(cam_yaml, aruco_board_yaml)
 
     # dataset setup (Lidar and Camera folders)
-    dataset_path = Path("sync_lidar_camera_aruco")
+    dataset_path = Path("sync_one")
     camera_prefix = "racecar_camera_camera_0_image_raw"
     lidar_camera_sync.dataloader(dataset_path, camera_prefix)
 

@@ -1,4 +1,5 @@
 import rerun as rr
+import rerun.blueprint as rrb
 import numpy as np
 
 
@@ -33,9 +34,30 @@ def _rotation_matrix_to_quat_xyzw(R: np.ndarray) -> np.ndarray:
     return np.array([x, y, z, w], dtype=np.float32)
 
 
+def _default_blueprint():
+    """Two 3D views: Lidar only (left), Camera only (right). Each view shows only its own entities."""
+    return rrb.Blueprint(
+        rrb.Horizontal(
+            # Left: only lidar point clouds and board (no camera data)
+            rrb.Spatial3DView(
+                origin="lidar",
+                name="Lidar",
+                contents=["lidar/points", "lidar/roi_cloud_xyz", "lidar/board_corners", "lidar/board_pose", "lidar/origin"],
+            ),
+            # Right: only camera 3D points, axes, and board pose (no lidar point clouds)
+            rrb.Spatial3DView(
+                origin="camera",
+                name="Camera",
+                contents=["camera/points_3d", "camera/axes", "camera/board_pose"],
+            ),
+        ),
+        collapse_panels=False,
+    )
+
+
 class RerunVisualizer:
     def __init__(self, app_name="extrinsicCalibration"):
-        rr.init(app_name, spawn=True)
+        rr.init(app_name, spawn=True, default_blueprint=_default_blueprint())
 
     def log_image(self, frame_idx: int, image: np.ndarray):
         # Set the “frame” timeline using the new API:
@@ -45,10 +67,11 @@ class RerunVisualizer:
             rr.Image(image),
         )
 
-    def log_pointcloud(self, frame_idx: int, points_xyz: np.ndarray):
+    def log_pointcloud(self, frame_idx: int, points_xyz: np.ndarray, colors: np.ndarray = None):
         rr.set_time("frame", sequence=frame_idx)
-        # Gray so ROI (red) stands out in the same 3D view
-        colors = np.full((points_xyz.shape[0], 3), [160, 160, 160], dtype=np.uint8)
+        if colors is None:
+            # Gray so ROI (red) stands out in the same 3D view
+            colors = np.full((points_xyz.shape[0], 3), [160, 160, 160], dtype=np.uint8)
         rr.log(
             "lidar/points",
             rr.Points3D(points_xyz, colors=colors),
@@ -115,3 +138,37 @@ class RerunVisualizer:
         ]
         colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
         rr.log("lidar/origin", rr.LineStrips3D(strips, colors=colors))
+
+    def log_camera_points_3d(
+        self,
+        frame_idx: int,
+        points_xyz: np.ndarray,
+        corner_ids=None,
+    ):
+        """Log board corners in camera frame (camera/points_3d) for a separate 3D view."""
+        rr.set_time("frame", sequence=frame_idx)
+        points_xyz = np.asarray(points_xyz, dtype=np.float32)
+        if points_xyz.size == 0:
+            return
+        n = points_xyz.shape[0]
+        colors = np.full((n, 3), [0, 200, 255], dtype=np.uint8)
+        labels = None
+        if corner_ids is not None and np.size(corner_ids) >= n:
+            ids = np.asarray(corner_ids, dtype=np.int32).ravel()[:n]
+            labels = [str(int(i)) for i in ids]
+        rr.log(
+            "camera/points_3d",
+            rr.Points3D(points_xyz, colors=colors, radii=0.02, labels=labels),
+        )
+
+    def log_camera_axes(self, frame_idx: int, axis_length: float = 0.4):
+        """Log camera coordinate frame at origin (camera frame). X=red, Y=green, Z=blue."""
+        rr.set_time("frame", sequence=frame_idx)
+        L = axis_length
+        strips = [
+            np.array([[0.0, 0.0, 0.0], [L, 0.0, 0.0]], dtype=np.float32),
+            np.array([[0.0, 0.0, 0.0], [0.0, L, 0.0]], dtype=np.float32),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]], dtype=np.float32),
+        ]
+        colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
+        rr.log("camera/axes", rr.LineStrips3D(strips, colors=colors))

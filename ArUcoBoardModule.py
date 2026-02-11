@@ -540,6 +540,47 @@ class ArUcoBoardConfig:
         corner_ids = np.array([1, 2, 3, 4], dtype=np.int32)
         return corners_cam.astype(np.float32), corner_ids
 
+    def compute_board_corners_in_image(
+        self,
+        rvec: np.ndarray,
+        tvec: np.ndarray,
+        camera_matrix: np.ndarray,
+        dist_coeffs: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute the 4 board corners in 2D image (pixel) coordinates.
+
+        Same corner order and IDs as compute_board_corners_in_camera_frame:
+            1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right.
+
+        Args:
+            rvec: (3,1) or (3,) rotation vector from estimate_board_pose
+            tvec: (3,1) or (3,) translation from estimate_board_pose
+            camera_matrix: 3x3 camera intrinsic matrix
+            dist_coeffs: distortion coefficients (use zeros for undistorted image)
+
+        Returns:
+            pts_2d: (4, 2) float32, pixel coordinates (u, v) for each corner
+            corner_ids: (4,) int32, ids [1, 2, 3, 4] (empty array on failure)
+        """
+        empty_pts = np.zeros((0, 2), dtype=np.float32)
+        empty_ids = np.array([], dtype=np.int32)
+        corners_cam, corner_ids = self.compute_board_corners_in_camera_frame(rvec, tvec)
+        if corners_cam.shape[0] != 4:
+            return empty_pts, empty_ids
+        dist = np.asarray(dist_coeffs, dtype=np.float64).reshape(-1, 1)
+        rvec_zero = np.zeros((3, 1), dtype=np.float64)
+        tvec_zero = np.zeros((3, 1), dtype=np.float64)
+        pts_2d, _ = cv2.projectPoints(
+            corners_cam.reshape(4, 1, 3),
+            rvec_zero,
+            tvec_zero,
+            camera_matrix,
+            dist,
+        )
+        pts_2d = pts_2d.reshape(4, 2).astype(np.float32)
+        return pts_2d, corner_ids
+
     def _get_circular_cutouts_board_frame(self) -> List[Tuple[np.ndarray, float]]:
         """Return list of (center_xyz, radius) in board frame for each circular cutout. center z=0."""
         out: List[Tuple[np.ndarray, float]] = []

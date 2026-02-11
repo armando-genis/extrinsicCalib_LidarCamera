@@ -104,3 +104,5 @@ deactivate
 rm -rf .venv
 uv cache clean
 ```
+
+The code assumed OpenCV BGR and did color[::-1] to get RGB. Your decoded images are already RGB, so that flip was wrong and made colors look blue. The flip is removed; pixel values are used as-is (RGB).
